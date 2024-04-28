@@ -7,12 +7,12 @@ seed_everything(args.seed)
 trainer = FGLTrainer(args)
 trainer.train()
 
-# fedavg    73.42
-# fedprox   74.48
-# scaffold  75.69
-# moon      75.59
-# feddc     69.92
-# fedproto  67.54
-# fedtgp    66.65
-# fedabc    77.08
+# fedavg    73.42  71.32
+# fedprox   74.48  76.81
+# scaffold  75.69  76.34
+# moon      75.59  76.83
+# feddc     69.92  73.89
+# fedproto  67.54  71.71
+# fedtgp    66.65  72.89
+# fedabc           76.73
 

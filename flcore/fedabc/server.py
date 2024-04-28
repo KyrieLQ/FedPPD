@@ -143,18 +143,36 @@ class FedAbcServer(BaseServer):
                     distances = torch.cdist(pseudo_prototypes, real_prototypes)
                     loss = torch.mean(distances, dim=1)  # 对于每个类别，计算所有距离的平均值
                     loss_cdist_ll += torch.sum(loss)
-                l2_reg = 0
-                for param in generator.parameters():
-                    l2_reg = l2_reg+torch.sum(param.pow(2))
-                loss_cdist_ll=loss_cdist_ll+self.args.weight_decay*l2_reg
                 loss_cdist_ll.backward(retain_graph=True)
                 generator_optimizer.step()
+
+            # 最后一次更新后重新生成伪图
+            node_logits = generator.forward(z=z, c=c)
+            node_norm = F.normalize(node_logits, p=2, dim=1)
+            adj_logits = torch.mm(node_norm, node_norm.t())
+            topk = 5
+            pseudo_graph = self.construct_graph(
+                node_logits, adj_logits, topk)
+
+            # 最后一次更新后计算本地伪原型
+            pseudo_local_prototype = {}
+            for client_id in self.message_pool["sampled_clients"]:
+                local_pred, _ = self.message_pool[f"client_{client_id}"]["local_model"].forward(data=pseudo_graph)
+                # print(local_pred.shape)
+                class_prototypes = []
+                for class_i in range(self.global_data["num_classes"]):
+                    class_indices = each_class_idx[class_i]
+                    class_preds = local_pred[class_indices]
+                    class_prototype = torch.mean(class_preds, dim=0)
+                    class_prototypes.append(class_prototype)
+                pseudo_local_prototype[client_id] = torch.stack(class_prototypes)  # 虚假本地原型
 
             self.task.model.train()
             generator.eval()
             #通过虚假的全局原型和虚假的本地原型，来指导全局模型的更新
             for it_t in range(self.args.it_t):
                 global_model_optimizer.zero_grad()
+
                 #计算伪全局原型
                 all_class_prototypes  = {class_i: [] for class_i in range(self.global_data["num_classes"])}
                 for client_id in self.message_pool["sampled_clients"]:
@@ -167,8 +185,8 @@ class FedAbcServer(BaseServer):
                     class_prototypes = torch.stack(all_class_prototypes[class_i])
                     # 计算所有客户端原型的均值作为全局原型
                     pseudo_global_prototype[class_i] = torch.mean(class_prototypes, dim=0)
-                pseudo_global_prototype= torch.stack([pseudo_global_prototype[class_i] for class_i in range(self.global_data["num_classes"])])
-                pseudo_global_prototype=pseudo_global_prototype.detach()
+                pseudo_global_prototype = torch.stack([pseudo_global_prototype[class_i] for class_i in range(self.global_data["num_classes"])])
+                pseudo_global_prototype = pseudo_global_prototype.detach()
 
                 #对于每个虚假本地原型和虚假全局原型求欧式距离损失并累加
                 loss_cdist_lg = 0
@@ -176,11 +194,7 @@ class FedAbcServer(BaseServer):
                     pseudo_prototypes_local = copy.copy(pseudo_local_prototype[client_id])
                     distances = torch.cdist(pseudo_prototypes_local, pseudo_global_prototype)
                     loss = torch.mean(distances, dim=1)  # 对于每个类别，计算所有距离的平均值
-                    loss_cdist_lg = loss_cdist_lg+torch.sum(loss)
-                l2_reg_global = 0
-                for param in self.task.model.parameters():
-                    l2_reg_global = l2_reg_global+torch.sum(param.pow(2))
-                loss_cdist_lg += self.args.weight_decay * l2_reg_global
+                    loss_cdist_lg += torch.sum(loss)
                 with torch.autograd.set_detect_anomaly(True):
                     loss_cdist_lg.backward(retain_graph=True)
                 global_model_optimizer.step()
