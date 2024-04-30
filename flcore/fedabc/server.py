@@ -29,11 +29,19 @@ class FedAbcServer(BaseServer):
         np.random.shuffle(labels)
         return labels.astype(int)
 
-    def construct_graph(self,node_logits, adj_logits, k=5):
+    def construct_graph(self,node_logits, adj_logits, k_values):
         adjacency_matrix = torch.zeros_like(adj_logits)
-        topk_values, topk_indices = torch.topk(adj_logits, k=k, dim=1)
-        for i in range(node_logits.shape[0]):
-            adjacency_matrix[i, topk_indices[i]] = 1
+        num_nodes = node_logits.shape[0]
+        # topk_values, topk_indices = torch.topk(adj_logits, k=k, dim=1)
+        # for i in range(node_logits.shape[0]):
+        #     adjacency_matrix[i, topk_indices[i]] = 1
+        for i in range(num_nodes):
+            # 根据k_values中对应节点的值来获取top-k的索引
+            topk_index = int(k_values[i])
+            topk_values, topk_indices = torch.topk(adj_logits[i], k=topk_index, dim=0)
+            # 将选定的top-k邻接值设置为1
+            for idx in topk_indices:
+                adjacency_matrix[i, idx] = 1
         adjacency_matrix = adjacency_matrix + adjacency_matrix.t()
         adjacency_matrix[adjacency_matrix > 1] = 1
         adjacency_matrix.fill_diagonal_(1)
@@ -42,6 +50,7 @@ class FedAbcServer(BaseServer):
         edge_index = add_self_loops(edge_index)[0]
         data = Data(x=node_logits, edge_index=edge_index)
         return data
+
 
     def execute(self):
         #不改变客户端模型
@@ -106,10 +115,10 @@ class FedAbcServer(BaseServer):
         for _ in range(self.args.glb_epoches):
             z = torch.randn((gen_num, noise_dim)).to(self.device)
             #print(c.shape)
-            loss1_2 = 0
             self.task.model.eval()
             generator.train()
 
+            k_values = [5] * gen_num
             #生成器训练
             for it_g in range(self.args.it_g):
                 generator_optimizer.zero_grad()
@@ -118,19 +127,46 @@ class FedAbcServer(BaseServer):
                 node_logits = generator.forward(z=z, c=c)
                 node_norm = F.normalize(node_logits, p=2, dim=1)
                 adj_logits = torch.mm(node_norm, node_norm.t())
-                topk = 5
+                #topk = 5
                 pseudo_graph = self.construct_graph(
-                    node_logits, adj_logits, topk)
+                    node_logits, adj_logits, k_values)
+
+
+                #计算每个点的邻居节点
+                neighbors_for_every_node = {i: [] for i in range(0, gen_num)}
+                for i in range(pseudo_graph.edge_index.size(1)):
+                    neighbors_for_every_node[pseudo_graph.edge_index[1, i].item()].append(pseudo_graph.edge_index[0, i].item())
+                    neighbors_for_every_node[pseudo_graph.edge_index[0, i].item()].append(pseudo_graph.edge_index[1, i].item())
+                neighbors_for_every_node_new = {key: list(set(value)) for key, value in neighbors_for_every_node.items()}
 
                 #计算本地伪原型
                 pseudo_local_prototype = {}
                 for client_id in self.message_pool["sampled_clients"]:
                     local_pred, _ = self.message_pool[f"client_{client_id}"]["local_model"].forward(data=pseudo_graph)
-                    # print(local_pred.shape)
+
+                    local_pred_new = torch.zeros_like(local_pred)
+                    #对每个点聚合其邻居的原型表示
+                    for node_idx in range(gen_num):
+                        if neighbors_for_every_node_new[node_idx].__len__() > 0:  # 如果当前节点有邻居节点
+                            # 获取邻居节点的类别原型
+                            origin_local_pred = local_pred[node_idx]
+                            neighbor_prototypes = [local_pred[i] for i in neighbors_for_every_node_new[node_idx]]
+                            neighbor_prototypes = torch.stack(neighbor_prototypes)
+
+                            # 计算邻居节点的原型的均值并更新聚合后的原型
+                            neighbor_prototype_mean = torch.mean(neighbor_prototypes, dim=0)
+                            local_pred_new[node_idx] = local_pred[node_idx]*0.8 + neighbor_prototype_mean*0.2
+
+                            #若距离小于某个阈值则将可选择的邻居-1
+                            dist = (origin_local_pred - local_pred_new[node_idx]).pow(2).sum().sqrt()
+                            if dist.item()>self.args.dist_val:
+                                if k_values[node_idx]>=3: #不少于2条边
+                                    k_values[node_idx]-=1
+
                     class_prototypes = []
                     for class_i in range(self.global_data["num_classes"]):
                         class_indices = each_class_idx[class_i]
-                        class_preds = local_pred[class_indices]
+                        class_preds = local_pred_new[class_indices]
                         class_prototype = torch.mean(class_preds, dim=0)
                         class_prototypes.append(class_prototype)
                     pseudo_local_prototype[client_id] = torch.stack(class_prototypes)  # 虚假本地原型
@@ -150,19 +186,47 @@ class FedAbcServer(BaseServer):
             node_logits = generator.forward(z=z, c=c)
             node_norm = F.normalize(node_logits, p=2, dim=1)
             adj_logits = torch.mm(node_norm, node_norm.t())
-            topk = 5
+            #topk = 5
             pseudo_graph = self.construct_graph(
-                node_logits, adj_logits, topk)
+                node_logits, adj_logits, k_values)
+
+            # 计算每个点的邻居节点
+            neighbors_for_every_node = {i: [] for i in range(0, gen_num)}
+            for i in range(pseudo_graph.edge_index.size(1)):
+                neighbors_for_every_node[pseudo_graph.edge_index[1, i].item()].append(
+                    pseudo_graph.edge_index[0, i].item())
+                neighbors_for_every_node[pseudo_graph.edge_index[0, i].item()].append(
+                    pseudo_graph.edge_index[1, i].item())
+            neighbors_for_every_node_new = {key: list(set(value)) for key, value in neighbors_for_every_node.items()}
 
             # 最后一次更新后计算本地伪原型
             pseudo_local_prototype = {}
             for client_id in self.message_pool["sampled_clients"]:
                 local_pred, _ = self.message_pool[f"client_{client_id}"]["local_model"].forward(data=pseudo_graph)
-                # print(local_pred.shape)
+
+                local_pred_new = torch.zeros_like(local_pred)
+                # 对每个点聚合其邻居的原型表示
+                for node_idx in range(gen_num):
+                    if neighbors_for_every_node_new[node_idx].__len__() > 0:  # 如果当前节点有邻居节点
+                        # 获取邻居节点的类别原型
+                        origin_local_pred = local_pred[node_idx]
+                        neighbor_prototypes = [local_pred[i] for i in neighbors_for_every_node_new[node_idx]]
+                        neighbor_prototypes = torch.stack(neighbor_prototypes)
+
+                        # 计算邻居节点的原型的均值并更新聚合后的原型
+                        neighbor_prototype_mean = torch.mean(neighbor_prototypes, dim=0)
+                        local_pred_new[node_idx] = local_pred[node_idx] * 0.8 + neighbor_prototype_mean * 0.2
+
+                        # 若距离小于某个阈值则将可选择的邻居-1
+                        dist = (origin_local_pred - local_pred_new[node_idx]).pow(2).sum().sqrt()
+                        if dist.item() > self.args.dist_val:
+                            if k_values[node_idx] >= 3:  # 不少于2条边
+                                k_values[node_idx] -= 1
+
                 class_prototypes = []
                 for class_i in range(self.global_data["num_classes"]):
                     class_indices = each_class_idx[class_i]
-                    class_preds = local_pred[class_indices]
+                    class_preds = local_pred_new[class_indices]
                     class_prototype = torch.mean(class_preds, dim=0)
                     class_prototypes.append(class_prototype)
                 pseudo_local_prototype[client_id] = torch.stack(class_prototypes)  # 虚假本地原型

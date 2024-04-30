@@ -47,7 +47,7 @@ parser.add_argument("--processing", type=str, default="feature_mask", choices=su
 # fl settings
 parser.add_argument("--num_clients", type=int, default=10)
 parser.add_argument("--num_rounds", type=int, default=100)
-parser.add_argument("--fl_algorithm", type=str, default="fedtgp", choices=supported_fl_algorithm)
+parser.add_argument("--fl_algorithm", type=str, default="fedabc", choices=supported_fl_algorithm)
 parser.add_argument("--client_frac", type=float, default=1.0)
 
 
@@ -73,6 +73,7 @@ parser.add_argument('--it_g', type=int, default=1)
 parser.add_argument('--lr_g', type=float, default=1e-3)
 parser.add_argument('--it_t', type=int, default=1)
 parser.add_argument('--lr_t', type=float, default=1e-3)
+parser.add_argument('--dist_val', type=float, default=0.4)
 
 
 
