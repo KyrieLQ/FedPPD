@@ -111,82 +111,97 @@ class FedAbcServer(BaseServer):
             real_local_prototype[client_id] =  real_local_prototype1 # 真实的本地原型
         #print(real_local_prototype[0].shape)
 
-        #多次与客户端交互
-        for _ in range(self.args.glb_epoches):
-            z = torch.randn((gen_num, noise_dim)).to(self.device)
-            #print(c.shape)
-            self.task.model.eval()
-            generator.train()
+        #与客户端交互
+        self.task.model.eval()
+        generator.train()
+        #for _ in range(self.args.glb_epoches):
+        z = torch.randn((gen_num, noise_dim)).to(self.device)
 
-            k_values = [5] * gen_num
-            #生成器训练
-            for it_g in range(self.args.it_g):
-                generator_optimizer.zero_grad()
+        k_values = [5] * gen_num
+        #生成器训练
+        for it_g in range(self.args.it_g):
+            generator_optimizer.zero_grad()
 
-                #生成伪图
-                node_logits = generator.forward(z=z, c=c)
-                node_norm = F.normalize(node_logits, p=2, dim=1)
-                adj_logits = torch.mm(node_norm, node_norm.t())
-                #topk = 5
-                pseudo_graph = self.construct_graph(
-                    node_logits, adj_logits, k_values)
-
-
-                #计算每个点的邻居节点
-                neighbors_for_every_node = {i: [] for i in range(0, gen_num)}
-                for i in range(pseudo_graph.edge_index.size(1)):
-                    neighbors_for_every_node[pseudo_graph.edge_index[1, i].item()].append(pseudo_graph.edge_index[0, i].item())
-                    neighbors_for_every_node[pseudo_graph.edge_index[0, i].item()].append(pseudo_graph.edge_index[1, i].item())
-                neighbors_for_every_node_new = {key: list(set(value)) for key, value in neighbors_for_every_node.items()}
-
-                #计算本地伪原型
-                pseudo_local_prototype = {}
-                for client_id in self.message_pool["sampled_clients"]:
-                    local_pred, _ = self.message_pool[f"client_{client_id}"]["local_model"].forward(data=pseudo_graph)
-
-                    local_pred_new = torch.zeros_like(local_pred)
-                    #对每个点聚合其邻居的原型表示
-                    for node_idx in range(gen_num):
-                        if neighbors_for_every_node_new[node_idx].__len__() > 0:  # 如果当前节点有邻居节点
-                            # 获取邻居节点的类别原型
-                            origin_local_pred = local_pred[node_idx]
-                            neighbor_prototypes = [local_pred[i] for i in neighbors_for_every_node_new[node_idx]]
-                            neighbor_prototypes = torch.stack(neighbor_prototypes)
-
-                            # 计算邻居节点的原型的均值并更新聚合后的原型
-                            neighbor_prototype_mean = torch.mean(neighbor_prototypes, dim=0)
-                            local_pred_new[node_idx] = local_pred[node_idx]*0.8 + neighbor_prototype_mean*0.2
-
-                            #若距离小于某个阈值则将可选择的邻居-1
-                            dist = (origin_local_pred - local_pred_new[node_idx]).pow(2).sum().sqrt()
-                            if dist.item()>self.args.dist_val:
-                                if k_values[node_idx]>=3: #不少于2条边
-                                    k_values[node_idx]-=1
-
-                    class_prototypes = []
-                    for class_i in range(self.global_data["num_classes"]):
-                        class_indices = each_class_idx[class_i]
-                        class_preds = local_pred_new[class_indices]
-                        class_prototype = torch.mean(class_preds, dim=0)
-                        class_prototypes.append(class_prototype)
-                    pseudo_local_prototype[client_id] = torch.stack(class_prototypes)  # 虚假本地原型
-
-                #计算虚假本地原型和真实本地原型的 欧氏距离损失
-                loss_cdist_ll = 0
-                for client_id in self.message_pool["sampled_clients"]:
-                    real_prototypes = real_local_prototype[client_id]
-                    pseudo_prototypes = copy.copy(pseudo_local_prototype[client_id])
-                    distances = torch.cdist(pseudo_prototypes, real_prototypes)
-                    loss = torch.mean(distances, dim=1)  # 对于每个类别，计算所有距离的平均值
-                    loss_cdist_ll += torch.sum(loss)
-                loss_cdist_ll.backward(retain_graph=True)
-                generator_optimizer.step()
-
-            # 最后一次更新后重新生成伪图
+            #生成伪图
             node_logits = generator.forward(z=z, c=c)
             node_norm = F.normalize(node_logits, p=2, dim=1)
             adj_logits = torch.mm(node_norm, node_norm.t())
             #topk = 5
+            pseudo_graph = self.construct_graph(
+                node_logits, adj_logits, k_values)
+
+
+            #计算每个点的邻居节点
+            neighbors_for_every_node = {i: [] for i in range(0, gen_num)}
+            for i in range(pseudo_graph.edge_index.size(1)):
+                neighbors_for_every_node[pseudo_graph.edge_index[1, i].item()].append(pseudo_graph.edge_index[0, i].item())
+                neighbors_for_every_node[pseudo_graph.edge_index[0, i].item()].append(pseudo_graph.edge_index[1, i].item())
+            neighbors_for_every_node_new = {key: list(set(value)) for key, value in neighbors_for_every_node.items()}
+
+            #计算本地伪原型
+            pseudo_local_prototype = {}
+            for client_id in self.message_pool["sampled_clients"]:
+                local_pred, _ = self.message_pool[f"client_{client_id}"]["local_model"].forward(data=pseudo_graph)
+
+                local_pred_new = torch.zeros_like(local_pred)
+                #对每个点聚合其邻居的原型表示
+                for node_idx in range(gen_num):
+                    if neighbors_for_every_node_new[node_idx].__len__() > 0:  # 如果当前节点有邻居节点
+                        # 获取邻居节点的类别原型
+                        neighbor_prototypes = [local_pred[i] for i in neighbors_for_every_node_new[node_idx]]
+                        neighbor_prototypes = torch.stack(neighbor_prototypes)
+
+                        # 计算邻居节点的原型的均值并更新聚合后的原型
+                        neighbor_prototype_mean = torch.mean(neighbor_prototypes, dim=0)
+                        local_pred_new[node_idx] = local_pred[node_idx]*0.8 + neighbor_prototype_mean*0.2
+
+                        #若距离小于某个阈值则将可选择的邻居-1
+                        dist = (local_pred[node_idx] - local_pred_new[node_idx]).pow(2).sum().sqrt()
+                        if dist.item()>self.args.dist_val:
+                            if k_values[node_idx]>=3: #不少于2条边
+                                k_values[node_idx]-=1
+
+                local_pred_new.retain_grad()
+                class_prototypes = []
+                for class_i in range(self.global_data["num_classes"]):
+                    class_indices = each_class_idx[class_i]
+                    class_preds = local_pred_new[class_indices]
+                    class_prototype = torch.mean(class_preds, dim=0)
+                    class_prototypes.append(class_prototype)
+                pseudo_local_prototype[client_id] = torch.stack(class_prototypes)  # 虚假本地原型
+
+            #计算虚假本地原型和真实本地原型的 欧氏距离损失
+            loss_cdist_ll = 0
+            for client_id in self.message_pool["sampled_clients"]:
+                real_prototypes = real_local_prototype[client_id]
+                pseudo_prototypes = pseudo_local_prototype[client_id]
+                distances = torch.cdist(pseudo_prototypes, real_prototypes)
+                loss = torch.mean(distances, dim=1)  # 对于每个类别，计算所有距离的平均值
+                loss_cdist_ll += torch.sum(loss)
+                loss_cdist_ll.retain_grad()
+
+
+            loss_cdist_ll.backward(retain_graph=True)
+            # for param in generator.parameters():
+            #     if param.requires_grad:
+            #         print(param.grad)
+            # print("--------------------------------------")
+            #print(local_pred_new.grad)
+            generator_optimizer.step()
+
+
+
+        self.task.model.train()
+        generator.eval()
+        #通过虚假的全局原型和虚假的本地原型，来指导全局模型的更新
+        for it_t in range(self.args.it_t):
+            global_model_optimizer.zero_grad()
+
+            # 生成伪图
+            node_logits = generator.forward(z=z, c=c)
+            node_norm = F.normalize(node_logits, p=2, dim=1)
+            adj_logits = torch.mm(node_norm, node_norm.t())
+            # topk = 5
             pseudo_graph = self.construct_graph(
                 node_logits, adj_logits, k_values)
 
@@ -199,29 +214,22 @@ class FedAbcServer(BaseServer):
                     pseudo_graph.edge_index[1, i].item())
             neighbors_for_every_node_new = {key: list(set(value)) for key, value in neighbors_for_every_node.items()}
 
-            # 最后一次更新后计算本地伪原型
+            # 计算本地伪原型
             pseudo_local_prototype = {}
             for client_id in self.message_pool["sampled_clients"]:
                 local_pred, _ = self.message_pool[f"client_{client_id}"]["local_model"].forward(data=pseudo_graph)
 
-                local_pred_new = torch.zeros_like(local_pred)
+                local_pred_new = torch.zeros_like(local_pred).to(self.device)
                 # 对每个点聚合其邻居的原型表示
                 for node_idx in range(gen_num):
                     if neighbors_for_every_node_new[node_idx].__len__() > 0:  # 如果当前节点有邻居节点
                         # 获取邻居节点的类别原型
-                        origin_local_pred = local_pred[node_idx]
                         neighbor_prototypes = [local_pred[i] for i in neighbors_for_every_node_new[node_idx]]
                         neighbor_prototypes = torch.stack(neighbor_prototypes)
 
                         # 计算邻居节点的原型的均值并更新聚合后的原型
                         neighbor_prototype_mean = torch.mean(neighbor_prototypes, dim=0)
                         local_pred_new[node_idx] = local_pred[node_idx] * 0.8 + neighbor_prototype_mean * 0.2
-
-                        # 若距离小于某个阈值则将可选择的邻居-1
-                        dist = (origin_local_pred - local_pred_new[node_idx]).pow(2).sum().sqrt()
-                        if dist.item() > self.args.dist_val:
-                            if k_values[node_idx] >= 3:  # 不少于2条边
-                                k_values[node_idx] -= 1
 
                 class_prototypes = []
                 for class_i in range(self.global_data["num_classes"]):
@@ -231,39 +239,47 @@ class FedAbcServer(BaseServer):
                     class_prototypes.append(class_prototype)
                 pseudo_local_prototype[client_id] = torch.stack(class_prototypes)  # 虚假本地原型
 
-            self.task.model.train()
-            generator.eval()
-            #通过虚假的全局原型和虚假的本地原型，来指导全局模型的更新
-            for it_t in range(self.args.it_t):
-                global_model_optimizer.zero_grad()
+            #计算伪全局原型
+            # all_class_prototypes  = {class_i: [] for class_i in range(self.global_data["num_classes"])}
+            # for client_id in self.message_pool["sampled_clients"]:
+            #     pseudo_local_prototypes = pseudo_local_prototype[client_id]
+            #     for class_i in range(self.global_data["num_classes"]):
+            #         all_class_prototypes[class_i].append(pseudo_local_prototypes[class_i])
+            # pseudo_global_prototype = {}
+            # for class_i in range(self.global_data["num_classes"]):
+            #     # 将所有客户端的该类别原型堆叠起来
+            #     class_prototypes = torch.stack(all_class_prototypes[class_i])
+            #     # 计算所有客户端原型的均值作为全局原型
+            #     pseudo_global_prototype[class_i] = torch.mean(class_prototypes, dim=0)
+            # pseudo_global_prototype = torch.stack([pseudo_global_prototype[class_i] for class_i in range(self.global_data["num_classes"])])
+            # pseudo_global_prototype = pseudo_global_prototype.detach()
 
-                #计算伪全局原型
-                all_class_prototypes  = {class_i: [] for class_i in range(self.global_data["num_classes"])}
-                for client_id in self.message_pool["sampled_clients"]:
-                    pseudo_local_prototypes = pseudo_local_prototype[client_id]
-                    for class_i in range(self.global_data["num_classes"]):
-                        all_class_prototypes[class_i].append(pseudo_local_prototypes[class_i])
-                pseudo_global_prototype = {}
-                for class_i in range(self.global_data["num_classes"]):
-                    # 将所有客户端的该类别原型堆叠起来
-                    class_prototypes = torch.stack(all_class_prototypes[class_i])
-                    # 计算所有客户端原型的均值作为全局原型
-                    pseudo_global_prototype[class_i] = torch.mean(class_prototypes, dim=0)
-                pseudo_global_prototype = torch.stack([pseudo_global_prototype[class_i] for class_i in range(self.global_data["num_classes"])])
-                pseudo_global_prototype = pseudo_global_prototype.detach()
-
-                #对于每个虚假本地原型和虚假全局原型求欧式距离损失并累加
-                loss_cdist_lg = 0
-                for client_id in self.message_pool["sampled_clients"]:
-                    pseudo_prototypes_local = copy.copy(pseudo_local_prototype[client_id])
-                    distances = torch.cdist(pseudo_prototypes_local, pseudo_global_prototype)
-                    loss = torch.mean(distances, dim=1)  # 对于每个类别，计算所有距离的平均值
-                    loss_cdist_lg += torch.sum(loss)
-                with torch.autograd.set_detect_anomaly(True):
-                    loss_cdist_lg.backward(retain_graph=True)
-                global_model_optimizer.step()
+            #通过全局模型计算伪全局原型2
+            global_pred, _ = self.task.model.forward(data=pseudo_graph)
+            pseudo_global_prototype2 = torch.zeros(*pseudo_local_prototype[0].shape)
+            for class_i in range(self.global_data["num_classes"]):
+                class_indices = each_class_idx[class_i]
+                class_preds = global_pred[class_indices]
+                class_prototype = torch.mean(class_preds, dim=0)
+                pseudo_global_prototype2[class_i] = class_prototype
 
 
+            #对于每个虚假本地原型和虚假全局原型求欧式距离损失并累加
+            loss_cdist_lg = 0
+            for client_id in self.message_pool["sampled_clients"]:
+                pseudo_prototypes_local = copy.copy(pseudo_local_prototype[client_id])
+                distances = torch.cdist(pseudo_prototypes_local, pseudo_global_prototype2)
+                loss = torch.mean(distances, dim=1)  # 对于每个类别，计算所有距离的平均值
+                loss_cdist_lg += torch.sum(loss)
+            # distances = torch.cdist(pseudo_global_prototype, pseudo_global_prototype2)
+            # loss = torch.mean(distances, dim=1)  # 对于每个类别，计算所有距离的平均值
+            # loss_cdist_lg += torch.sum(loss)
+            with torch.autograd.set_detect_anomaly(True):
+                loss_cdist_lg.backward(retain_graph=True)
+            global_model_optimizer.step()
+            for param in self.task.model.parameters():
+                if param.requires_grad:
+                    print(param.grad)
 
 
     def send_message(self):

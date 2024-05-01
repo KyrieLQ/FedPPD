@@ -14,5 +14,5 @@ trainer.train()
 # feddc     69.92  73.89
 # fedproto  67.54  71.71
 # fedtgp    66.65  72.89
-# fedabc           76.73
+# fedabc           76.73 77.48
 
