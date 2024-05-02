@@ -14,7 +14,7 @@ from torch_geometric.data import Data
 
 class FedAbcServer(BaseServer):
     def __init__(self, args, global_data, data_dir, message_pool, device):
-        super(FedAbcServer, self).__init__(args, global_data, data_dir, message_pool, device, custom_model=None)
+        super(FedAbcServer, self).__init__(args, global_data, data_dir, message_pool, device)
 
     def generate_labels(self,number, cls_num):  # cls_num代表每个类有多少样本  number需要生成的标签总数
         labels = np.arange(number)
@@ -277,9 +277,9 @@ class FedAbcServer(BaseServer):
             with torch.autograd.set_detect_anomaly(True):
                 loss_cdist_lg.backward(retain_graph=True)
             global_model_optimizer.step()
-            for param in self.task.model.parameters():
-                if param.requires_grad:
-                    print(param.grad)
+            # for param in self.task.model.parameters():
+            #     if param.requires_grad:
+            #         print(param.grad)
 
 
     def send_message(self):

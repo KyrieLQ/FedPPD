@@ -20,9 +20,6 @@ def load_client(args, client_id, data, data_dir, message_pool, device):
     if args.fl_algorithm == "fedavg":
         from flcore.fedavg.client import FedAvgClient
         return FedAvgClient(args, client_id, data, data_dir, message_pool, device)
-    elif args.fl_algorithm == "fedabc":
-        from flcore.fedabc.client import FedAbcClient
-        return FedAbcClient(args, client_id, data, data_dir, message_pool, device)
     elif args.fl_algorithm == "fedprox":
         from flcore.fedprox.client import FedProxClient
         return FedProxClient(args, client_id, data, data_dir, message_pool, device)
@@ -41,15 +38,23 @@ def load_client(args, client_id, data, data_dir, message_pool, device):
     elif args.fl_algorithm == "fedtgp":
         from flcore.fedtgp.client import FedTGPClient
         return FedTGPClient(args, client_id, data, data_dir, message_pool, device)
-    
+    elif args.fl_algorithm == "fedpub":
+        from flcore.fedpub.client import FedPubClient
+        return FedPubClient(args, client_id, data, data_dir, message_pool, device)
+    elif args.fl_algorithm == "fedstar":
+        from flcore.fedstar.client import FedStarClient
+        return FedStarClient(args, client_id, data, data_dir, message_pool, device)
+    elif args.fl_algorithm == "fedgta":
+        from flcore.fedgta.client import FedGTAClient
+        return FedGTAClient(args, client_id, data, data_dir, message_pool, device)
+    elif args.fl_algorithm == "fedabc":
+        from flcore.fedabc.client import FedAbcClient
+        return FedAbcClient(args, client_id, data, data_dir, message_pool, device)
     
 def load_server(args, global_data, data_dir, message_pool, device):
     if args.fl_algorithm == "fedavg":
         from flcore.fedavg.server import FedAvgServer
         return FedAvgServer(args, global_data, data_dir, message_pool, device)
-    elif args.fl_algorithm == "fedabc":
-        from flcore.fedabc.server import FedAbcServer
-        return FedAbcServer(args,global_data,data_dir,message_pool,device)
     elif args.fl_algorithm == "fedprox":
         from flcore.fedprox.server import FedProxServer
         return FedProxServer(args, global_data, data_dir, message_pool, device)
@@ -68,19 +73,33 @@ def load_server(args, global_data, data_dir, message_pool, device):
     elif args.fl_algorithm == "fedtgp":
         from flcore.fedtgp.server import FedTGPServer
         return FedTGPServer(args, global_data, data_dir, message_pool, device)
-    
-    
+    elif args.fl_algorithm == "fedpub":
+        from flcore.fedpub.server import FedPubServer
+        return FedPubServer(args, global_data, data_dir, message_pool, device)
+    elif args.fl_algorithm == "fedstar":
+        from flcore.fedstar.server import FedStarServer
+        return FedStarServer(args, global_data, data_dir, message_pool, device)
+    elif args.fl_algorithm == "fedgta":
+        from flcore.fedgta.server import FedGTAServer
+        return FedGTAServer(args, global_data, data_dir, message_pool, device)
+    elif args.fl_algorithm == "fedabc":
+        from flcore.fedabc.server import FedAbcServer
+        return FedAbcServer(args,global_data,data_dir,message_pool,device)
+
+
 def load_optim(args):
     if args.optim == "adam":
         from torch.optim import Adam
         return Adam
-    
-    
-def load_task(args, client_id, data, data_dir, device, custom_model=None):
+
+
+def load_task(args, client_id, data, data_dir, device):
     if args.task == "node_cls":
-        from task.fedsubgraph.node_cls import NodeClsTask
-        return NodeClsTask(args, client_id, data, data_dir, device, custom_model)
-    
+        from task.node_cls import NodeClsTask
+        return NodeClsTask(args, client_id, data, data_dir, device)
+    elif args.task == "graph_cls":
+        from task.graph_cls import GraphClsTask
+        return GraphClsTask(args, client_id, data, data_dir, device)
 
 
 def extract_floats(s):
@@ -92,11 +111,11 @@ def extract_floats(s):
     assert Decimal(parts[0]) + Decimal(parts[1]) + Decimal(parts[2]) == Decimal(1)
     return train, val, test
 
+
 def idx_to_mask_tensor(idx_list, length):
     mask = torch.zeros(length)
     mask[idx_list] = 1
     return mask
-
 
 
 def mask_tensor_to_idx(tensor):

@@ -5,7 +5,7 @@ from flcore.base import BaseClient
 
 class FedAbcClient(BaseClient):
     def __init__(self, args, client_id, data, data_dir, message_pool, device):
-        super(FedAbcClient, self).__init__(args, client_id, data, data_dir, message_pool, device, custom_model=None)
+        super(FedAbcClient, self).__init__(args, client_id, data, data_dir, message_pool, device)
         #self.fedproto_lambda = fedproto_lambda
         self.local_prototype = {}
 

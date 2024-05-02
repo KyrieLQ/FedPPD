@@ -1,3 +1,25 @@
+from torch_geometric.nn.pool import *
+
+def load_graph_cls_default_model(args, input_dim, output_dim, client_id=None):
+    if client_id is None:  # server
+        if len(args.model) > 1:
+            return None
+        else:
+            model_name = args.model[0]
+    else:  # client
+        if len(args.model) > 1:
+            model_id = int(len(args.model) * client_id / args.num_clients)
+            model_name = args.model[model_id]
+        else:
+            model_name = args.model[0]
+
+    if model_name == "gin":
+        from model.gin import GIN
+        return GIN(input_dim=input_dim, hid_dim=args.hid_dim, output_dim=output_dim, num_layers=args.num_layers,
+                   dropout=args.dropout)
+    else:
+        raise ValueError
+
 def load_node_cls_default_model(args, input_dim, output_dim, client_id=None):
     if client_id is None: # server
         if len(args.model) > 1:
