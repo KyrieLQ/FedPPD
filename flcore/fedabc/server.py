@@ -10,11 +10,21 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.utils import to_dense_adj, add_self_loops, dense_to_sparse
 from torch_geometric.data import Data
+from flcore.fedabc.fedabc_config import config
 
 
 class FedAbcServer(BaseServer):
     def __init__(self, args, global_data, data_dir, message_pool, device):
         super(FedAbcServer, self).__init__(args, global_data, data_dir, message_pool, device)
+        # 参数及模型初始化
+        # gen_num = 140
+        # gen_dim = 1433
+        # noise_dim = 32
+        self.generator = FedAbc_ConGenerator(noise_dim=config["noise_dim"], feat_dim=config["gen_dim"], out_dim=self.global_data["num_classes"],
+                                        dropout=0).to(self.device)
+        self.generator_optimizer = Adam(self.generator.parameters(), lr=self.args.lr_g, weight_decay=self.args.weight_decay)
+        self.global_model_optimizer = Adam(self.task.model.parameters(), lr=self.args.lr_t,
+                                      weight_decay=self.args.weight_decay)
 
     def generate_labels(self,number, cls_num):  # cls_num代表每个类有多少样本  number需要生成的标签总数
         labels = np.arange(number)
@@ -72,13 +82,7 @@ class FedAbcServer(BaseServer):
                     else:
                         global_param.data += weight * local_param
 
-        #参数及模型初始化
-        gen_num = 140
-        gen_dim = 1433
-        noise_dim = 32
-        generator = FedAbc_ConGenerator(noise_dim=noise_dim, feat_dim=1433, out_dim=self.global_data["num_classes"],dropout=0).to(self.device)
-        generator_optimizer = Adam(generator.parameters(), lr=self.args.lr_g, weight_decay=self.args.weight_decay)
-        global_model_optimizer = Adam(self.task.model.parameters(),lr=self.args.lr_t,weight_decay=self.args.weight_decay)
+
         #print( self.message_pool["sampled_clients"])
 
 
@@ -91,7 +95,7 @@ class FedAbcServer(BaseServer):
         cls_num = [0] * self.global_data["num_classes"]
         for i in y_label_total:
             cls_num[i] = cls_num[i] + 1
-        c = self.generate_labels(gen_num,cls_num)
+        c = self.generate_labels(config["gen_num"],cls_num)
         c = torch.tensor(c,dtype=torch.long)
         #print("c:")
         #print(c)
@@ -111,19 +115,19 @@ class FedAbcServer(BaseServer):
             real_local_prototype[client_id] =  real_local_prototype1 # 真实的本地原型
         #print(real_local_prototype[0].shape)
 
+        # for _ in range(self.args.glb_epoches):
         #与客户端交互
         self.task.model.eval()
-        generator.train()
-        #for _ in range(self.args.glb_epoches):
-        z = torch.randn((gen_num, noise_dim)).to(self.device)
+        self.generator.train()
+        z = torch.randn((config["gen_num"], config["noise_dim"])).to(self.device)
 
-        k_values = [5] * gen_num
+        k_values = [5] * config["gen_num"]
         #生成器训练
         for it_g in range(self.args.it_g):
-            generator_optimizer.zero_grad()
+            self.generator_optimizer.zero_grad()
 
             #生成伪图
-            node_logits = generator.forward(z=z, c=c)
+            node_logits = self.generator.forward(z=z, c=c)
             node_norm = F.normalize(node_logits, p=2, dim=1)
             adj_logits = torch.mm(node_norm, node_norm.t())
             #topk = 5
@@ -132,7 +136,7 @@ class FedAbcServer(BaseServer):
 
 
             #计算每个点的邻居节点
-            neighbors_for_every_node = {i: [] for i in range(0, gen_num)}
+            neighbors_for_every_node = {i: [] for i in range(0, config["gen_num"])}
             for i in range(pseudo_graph.edge_index.size(1)):
                 neighbors_for_every_node[pseudo_graph.edge_index[1, i].item()].append(pseudo_graph.edge_index[0, i].item())
                 neighbors_for_every_node[pseudo_graph.edge_index[0, i].item()].append(pseudo_graph.edge_index[1, i].item())
@@ -145,7 +149,7 @@ class FedAbcServer(BaseServer):
 
                 local_pred_new = torch.zeros_like(local_pred)
                 #对每个点聚合其邻居的原型表示
-                for node_idx in range(gen_num):
+                for node_idx in range(config["gen_num"]):
                     if neighbors_for_every_node_new[node_idx].__len__() > 0:  # 如果当前节点有邻居节点
                         # 获取邻居节点的类别原型
                         neighbor_prototypes = [local_pred[i] for i in neighbors_for_every_node_new[node_idx]]
@@ -153,7 +157,7 @@ class FedAbcServer(BaseServer):
 
                         # 计算邻居节点的原型的均值并更新聚合后的原型
                         neighbor_prototype_mean = torch.mean(neighbor_prototypes, dim=0)
-                        local_pred_new[node_idx] = local_pred[node_idx]*0.8 + neighbor_prototype_mean*0.2
+                        local_pred_new[node_idx] = local_pred[node_idx]*config["alpha"] + neighbor_prototype_mean*(1-config["alpha"])
 
                         #若距离小于某个阈值则将可选择的邻居-1
                         dist = (local_pred[node_idx] - local_pred_new[node_idx]).pow(2).sum().sqrt()
@@ -187,18 +191,18 @@ class FedAbcServer(BaseServer):
             #         print(param.grad)
             # print("--------------------------------------")
             #print(local_pred_new.grad)
-            generator_optimizer.step()
+            self.generator_optimizer.step()
 
 
 
         self.task.model.train()
-        generator.eval()
+        self.generator.eval()
         #通过虚假的全局原型和虚假的本地原型，来指导全局模型的更新
         for it_t in range(self.args.it_t):
-            global_model_optimizer.zero_grad()
+            self.global_model_optimizer.zero_grad()
 
             # 生成伪图
-            node_logits = generator.forward(z=z, c=c)
+            node_logits = self.generator.forward(z=z, c=c)
             node_norm = F.normalize(node_logits, p=2, dim=1)
             adj_logits = torch.mm(node_norm, node_norm.t())
             # topk = 5
@@ -206,7 +210,7 @@ class FedAbcServer(BaseServer):
                 node_logits, adj_logits, k_values)
 
             # 计算每个点的邻居节点
-            neighbors_for_every_node = {i: [] for i in range(0, gen_num)}
+            neighbors_for_every_node = {i: [] for i in range(0, config["gen_num"])}
             for i in range(pseudo_graph.edge_index.size(1)):
                 neighbors_for_every_node[pseudo_graph.edge_index[1, i].item()].append(
                     pseudo_graph.edge_index[0, i].item())
@@ -221,7 +225,7 @@ class FedAbcServer(BaseServer):
 
                 local_pred_new = torch.zeros_like(local_pred).to(self.device)
                 # 对每个点聚合其邻居的原型表示
-                for node_idx in range(gen_num):
+                for node_idx in range(config["gen_num"]):
                     if neighbors_for_every_node_new[node_idx].__len__() > 0:  # 如果当前节点有邻居节点
                         # 获取邻居节点的类别原型
                         neighbor_prototypes = [local_pred[i] for i in neighbors_for_every_node_new[node_idx]]
@@ -229,7 +233,7 @@ class FedAbcServer(BaseServer):
 
                         # 计算邻居节点的原型的均值并更新聚合后的原型
                         neighbor_prototype_mean = torch.mean(neighbor_prototypes, dim=0)
-                        local_pred_new[node_idx] = local_pred[node_idx] * 0.8 + neighbor_prototype_mean * 0.2
+                        local_pred_new[node_idx] = local_pred[node_idx] * config["alpha"] + neighbor_prototype_mean * (1-config["alpha"])
 
                 class_prototypes = []
                 for class_i in range(self.global_data["num_classes"]):
@@ -276,7 +280,7 @@ class FedAbcServer(BaseServer):
             # loss_cdist_lg += torch.sum(loss)
             with torch.autograd.set_detect_anomaly(True):
                 loss_cdist_lg.backward(retain_graph=True)
-            global_model_optimizer.step()
+            self.global_model_optimizer.step()
             # for param in self.task.model.parameters():
             #     if param.requires_grad:
             #         print(param.grad)
