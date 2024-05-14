@@ -1,8 +1,9 @@
-
 import torch
 import random
 from data.distributed_dataset_loader import FGLDataset
 from utils.basic_utils import load_client, load_server
+from utils.logger import Logger
+
 
 class FGLTrainer:
 
@@ -10,22 +11,29 @@ class FGLTrainer:
         self.args = args
         self.message_pool = {}
         fgl_dataset = FGLDataset(args)
-        #print(vars(fgl_dataset))
         self.device = torch.device(f"cuda:{args.gpuid}" if (torch.cuda.is_available() and args.use_cuda) else "cpu")
         self.clients = [load_client(args, client_id, fgl_dataset.local_data[client_id], fgl_dataset.processed_dir,
                                     self.message_pool, self.device) for client_id in range(self.args.num_clients)]
         self.server = load_server(args, fgl_dataset.global_data, fgl_dataset.processed_dir, self.message_pool,
                                   self.device)
 
-        self.best_val_acc = 0
-        self.best_test_acc = 0
-        self.best_round = 0
-        
+        self.evaluation_result = {"best_round": 0}
+        if self.args.task in ["graph_cls", "graph_reg", "node_cls", "link_pred"]:
+            for metric in self.args.metrics:
+                self.evaluation_result[f"best_val_{metric}"] = 0
+                self.evaluation_result[f"best_test_{metric}"] = 0
+        elif self.args.task in ["node_clust"]:
+            for metric in self.args.metrics:
+                self.evaluation_result[f"best_{metric}"] = 0
+
+        self.logger = Logger(args, self.message_pool, fgl_dataset.processed_dir)
+
     def train(self):
-        
+
         for round_id in range(self.args.num_rounds):
-            sampled_clients = sorted(random.sample(list(range(self.args.num_clients)), int(self.args.num_clients * self.args.client_frac)))
-            print(f"sampled_clients: {sampled_clients}")
+            sampled_clients = sorted(
+                random.sample(list(range(self.args.num_clients)), int(self.args.num_clients * self.args.client_frac)))
+            print(f"round # {round_id}\t\tsampled_clients: {sampled_clients}")
             self.message_pool["round"] = round_id
             self.message_pool["sampled_clients"] = sampled_clients
             self.server.send_message()
@@ -34,55 +42,116 @@ class FGLTrainer:
                 self.clients[client_id].send_message()
             self.server.execute()
 
-            if self.args.evaluation_mode == "personalized":
-                self.personalized_evaluation(round_id)
-            elif self.args.evaluation_mode == "global":
-                self.global_evaluation(round_id)
-            else:
-                raise ValueError
+            self.evaluate()
+            print("-" * 50)
 
-    def global_evaluation(self, round_id):
-        result = self.server.global_evaluate()
-        global_val_acc, global_test_acc = result["accuracy_val"], result["accuracy_test"]
+        self.logger.save()
 
-        if global_val_acc > self.best_val_acc:
-            self.best_val_acc = global_val_acc
-            self.best_test_acc = global_test_acc
-            self.best_round = round_id
+    def evaluate(self):
+        # download -> local-train -> evaluate on local data
+        evaluation_result = {"current_round": self.message_pool["round"]}
 
-        print(f"curr_round: {round_id}\tcurr_val: {global_val_acc:.4f}\tcurr_test: {global_test_acc:.4f}")
-        print(f"best_round: {self.best_round}\tbest_val: {self.best_val_acc:.4f}\tbest_test: {self.best_test_acc:.4f}")
-        print("-" * 50)
+        if self.args.task in ["graph_cls", "graph_reg", "node_cls", "link_pred"]:
+            for metric in self.args.metrics:
+                evaluation_result[f"current_val_{metric}"] = 0
+                evaluation_result[f"current_test_{metric}"] = 0
+        elif self.args.task in ["node_clust"]:
+            for metric in self.args.metrics:
+                evaluation_result[f"current_{metric}"] = 0
 
-    def personalized_evaluation(self, round_id):
-        global_val_acc = 0
-        global_test_acc = 0
-        tot_nodes = 0
+        tot_samples = 0
+        one_time_infer = False
 
         for client_id in range(self.args.num_clients):
-            result = self.clients[client_id].personalized_evaluate()
-            val_acc, test_acc = result["accuracy_val"], result["accuracy_test"]
-            num_nodes = self.clients[client_id].task.num_samples
-            global_val_acc += val_acc * num_nodes
-            global_test_acc += test_acc * num_nodes
-            tot_nodes += num_nodes
-        global_val_acc /= tot_nodes
-        global_test_acc /= tot_nodes
+            if self.args.evaluation_mode == "local_model_on_local_data":
+                num_samples = self.clients[client_id].task.num_samples
+                result = self.clients[client_id].task.evaluate()
 
-        if global_val_acc > self.best_val_acc:
-            self.best_val_acc = global_val_acc
-            self.best_test_acc = global_test_acc
-            self.best_round = round_id
+            elif self.args.evaluation_mode == "local_model_on_global_data":
+                num_samples = self.server.task.num_samples
+                result = self.clients[client_id].task.evaluate(self.server.task.splitted_data)
 
-        print(f"curr_round: {round_id}\tcurr_val: {global_val_acc:.4f}\tcurr_test: {global_test_acc:.4f}")
-        print(f"best_round: {self.best_round}\tbest_val: {self.best_val_acc:.4f}\tbest_test: {self.best_test_acc:.4f}")
-        print("-" * 50)
-            
-    
-    
-    
-    
-    
-        
-        
-        
+            elif self.args.evaluation_mode == "global_model_on_local_data":
+                num_samples = self.clients[client_id].task.num_samples
+                if self.server.personalized:
+                    raise ValueError(
+                        f"personalized algorithm {self.args.fl_algorithm} doesn't support global model evaluation.")
+                result = self.server.task.evaluate(self.clients[client_id].task.splitted_data)
+                print(1)
+            elif self.args.evaluation_mode == "global_model_on_global_data":
+                num_samples = self.server.task.num_samples
+                if self.server.personalized:
+                    raise ValueError(
+                        f"personalized algorithm {self.args.fl_algorithm} doesn't support global model evaluation.")
+                # only one-time infer
+                one_time_infer = True
+                result = self.server.task.evaluate()
+                print(1)
+
+            if self.args.task in ["graph_cls", "graph_reg", "node_cls", "link_pred"]:
+                for metric in self.args.metrics:
+                    val_metric, test_metric = result[f"{metric}_val"], result[f"{metric}_test"]
+                    evaluation_result[f"current_val_{metric}"] += val_metric * num_samples
+                    evaluation_result[f"current_test_{metric}"] += test_metric * num_samples
+            elif self.args.task in ["node_clust"]:
+                for metric in self.args.metrics:
+                    metric_value = result[f"{metric}"]
+                    evaluation_result[f"current_{metric}"] += metric_value * num_samples
+
+            if one_time_infer:
+                tot_samples = num_samples
+                break
+            else:
+                tot_samples += num_samples
+
+        if self.args.task in ["graph_cls", "graph_reg", "node_cls", "link_pred"]:
+            for metric in self.args.metrics:
+                evaluation_result[f"current_val_{metric}"] /= tot_samples
+                evaluation_result[f"current_test_{metric}"] /= tot_samples
+
+            if evaluation_result[f"current_val_{self.args.metrics[0]}"] > self.evaluation_result[
+                f"best_val_{self.args.metrics[0]}"]:
+                for metric in self.args.metrics:
+                    self.evaluation_result[f"best_val_{metric}"] = evaluation_result[f"current_val_{metric}"]
+                    self.evaluation_result[f"best_test_{metric}"] = evaluation_result[f"current_test_{metric}"]
+                self.evaluation_result[f"best_round"] = evaluation_result[f"current_round"]
+
+            current_output = f"curr_round: {evaluation_result['current_round']}\t" + \
+                             "\t".join([
+                                           f"curr_val_{metric}: {evaluation_result[f'current_val_{metric}']:.4f}\tcurr_test_{metric}: {evaluation_result[f'current_test_{metric}']:.4f}"
+                                           for metric in self.args.metrics])
+
+            best_output = f"best_round: {self.evaluation_result['best_round']}\t" + \
+                          "\t".join([
+                                        f"best_val_{metric}: {self.evaluation_result[f'best_val_{metric}']:.4f}\tbest_test_{metric}: {self.evaluation_result[f'best_test_{metric}']:.4f}"
+                                        for metric in self.args.metrics])
+
+            print(current_output)
+            print(best_output)
+        else:
+            for metric in self.args.metrics:
+                evaluation_result[f"current_{metric}"] /= tot_samples
+
+            if evaluation_result[f"current_{self.args.metrics[0]}"] > self.evaluation_result[
+                f"best_{self.args.metrics[0]}"]:
+                for metric in self.args.metrics:
+                    self.evaluation_result[f"best_{metric}"] = evaluation_result[f"current_{metric}"]
+                self.evaluation_result[f"best_round"] = evaluation_result[f"current_round"]
+
+            current_output = f"curr_round: {evaluation_result['current_round']}\t" + \
+                             "\t".join([f"curr_{metric}: {evaluation_result[f'current_{metric}']:.4f}" for metric in
+                                        self.args.metrics])
+
+            best_output = f"best_round: {self.evaluation_result['best_round']}\t" + \
+                          "\t".join([f"best_{metric}: {self.evaluation_result[f'best_{metric}']:.4f}" for metric in
+                                     self.args.metrics])
+
+            print(current_output)
+            print(best_output)
+
+        self.logger.add_log(evaluation_result)
+
+
+
+
+

@@ -43,3 +43,4 @@ class MoonClient(BaseClient):
             "num_samples": self.task.num_samples,
             "weight": list(self.task.model.parameters())
         }
+

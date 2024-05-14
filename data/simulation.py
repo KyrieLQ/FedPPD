@@ -1,15 +1,14 @@
 import copy
-import os
-import random
 import torch
 import numpy as np
-from torch_geometric.utils import subgraph, to_scipy_sparse_matrix, to_networkx
+from torch_geometric.utils import to_scipy_sparse_matrix, to_networkx
 from torch_geometric.data import Data
 from sknetwork.clustering import Louvain
+import sys
 from sklearn.cluster import KMeans
+
+
 import pymetis as metis
-from utils.basic_utils import extract_floats, idx_to_mask_tensor
-# from task.fedsubgraph.
 
 
 def get_subgraph_pyg_data(global_dataset, node_list):
@@ -21,7 +20,7 @@ def get_subgraph_pyg_data(global_dataset, node_list):
     for local_id, global_id in enumerate(node_list):
         global_id_to_local_id[global_id] = local_id
         local_id_to_global_id[local_id] = global_id
-        
+
     for edge_id in range(global_edge_index.shape[1]):
         src = global_edge_index[0, edge_id].item()
         tgt = global_edge_index[1, edge_id].item()
@@ -29,131 +28,142 @@ def get_subgraph_pyg_data(global_dataset, node_list):
             local_id_src = global_id_to_local_id[src]
             local_id_tgt = global_id_to_local_id[tgt]
             local_edge_list.append((local_id_src, local_id_tgt))
+
     local_edge_index = torch.tensor(local_edge_list).T
-    
-    
-    local_subgraph = Data(x=global_dataset[0].x[node_list], edge_index=local_edge_index, y=global_dataset[0].y[node_list])
+
+    local_subgraph = Data(x=global_dataset.x[node_list], edge_index=local_edge_index, y=global_dataset.y[node_list])
     local_subgraph.global_map = local_id_to_global_id
-    local_subgraph.num_classes = global_dataset.num_classes
+
+    if hasattr(global_dataset, "num_classes"):
+        local_subgraph.num_global_classes = global_dataset.num_classes
+    else:
+        local_subgraph.num_global_classes = global_dataset.num_global_classes
     return local_subgraph
-
-def local_graphs_train_val_test_split(local_graphs, split, num_classes=None):
-    num_local_graphs = len(local_graphs)
-    train_, val_, test_ = extract_floats(split)
-    
-    if num_classes is not None: # for classification problem
-        local_graphs.train_mask = idx_to_mask_tensor([], num_local_graphs)
-        local_graphs.val_mask = idx_to_mask_tensor([], num_local_graphs)
-        local_graphs.test_mask = idx_to_mask_tensor([], num_local_graphs)
-        for class_i in range(num_classes):
-            class_i_local_graphs_mask = local_graphs.y == class_i
-            num_class_i_local_graphs = class_i_local_graphs_mask.sum()
-            local_graphs.train_mask += idx_to_mask_tensor(class_i_local_graphs_mask.nonzero().squeeze().tolist()[:int(train_ * num_class_i_local_graphs)], num_local_graphs)
-            local_graphs.val_mask += idx_to_mask_tensor(class_i_local_graphs_mask.nonzero().squeeze().tolist()[int(train_ * num_class_i_local_graphs) : int((train_+val_) * num_class_i_local_graphs)], num_local_graphs)
-            local_graphs.test_mask += idx_to_mask_tensor(class_i_local_graphs_mask.nonzero().squeeze().tolist()[int((train_+val_) * num_class_i_local_graphs): ], num_local_graphs)
-    else: # for regression problem
-        local_graphs.train_mask = idx_to_mask_tensor(range(int(train_ * num_local_graphs)), num_local_graphs)
-        local_graphs.val_mask = idx_to_mask_tensor(range(int(train_ * num_local_graphs), int((train_+val_) * num_local_graphs)), num_local_graphs)
-        local_graphs.test_mask = idx_to_mask_tensor(range(int((train_+val_) * num_local_graphs), num_local_graphs), num_local_graphs)
-    
-    assert (local_graphs.train_mask + local_graphs.val_mask + local_graphs.test_mask).sum() == num_local_graphs
-
 
 
 def fedgraph_cross_domain(args, global_dataset):
     print("Conducting fedgraph cross domain simulation...")
     local_data = []
     for client_id in range(args.num_clients):
-        local_graphs = global_dataset[client_id]
+        local_graphs = global_dataset[client_id]  # list(InMemoryDataset) -> InMemoryDataset
+        local_graphs.num_global_classes = global_dataset[client_id].num_classes
         local_data.append(local_graphs)
     return local_data
-
 
 
 def fedgraph_label_dirichlet(args, global_dataset, shuffle=True):
     print("Conducting fedgraph label dirichlet simulation...")
-    num_graphs = len(global_dataset)
+
     graph_labels = global_dataset.y.numpy()
     num_clients = args.num_clients
     alpha = args.dirichlet_alpha
     unique_labels, label_counts = np.unique(graph_labels, return_counts=True)
-    partition_matrix = np.zeros((len(unique_labels), num_clients))
-    for i, label in enumerate(unique_labels):
-        proportions = np.random.dirichlet(alpha*np.ones(num_clients))
-        partition_matrix[i] = np.round(proportions * label_counts[i])
-        partition_matrix[i, -1] = label_counts[i] - partition_matrix[i,:-1].sum()
-    client_indices = [[] for _ in range(num_clients)]
-    for i, label in enumerate(unique_labels):
-        label_indices = np.where(graph_labels == label)[0]
-        if shuffle:
-            np.random.shuffle(label_indices)
-        cum_partitions = np.cumsum(partition_matrix[i]).astype(int)
-        prev_partition = 0
-        for client_id, partition in enumerate(cum_partitions):
-            client_indices[client_id].extend(label_indices[prev_partition:partition])
-            prev_partition = partition
+
+    print(f"num_classes: {len(unique_labels)}")
+    print(f"global label distribution: {label_counts}")
+
+    min_size = 0
+    K = len(unique_labels)
+    N = graph_labels.shape[0]
+
+    try_cnt = 0
+    while min_size < args.least_samples:
+        if try_cnt > args.dirichlet_try_cnt:
+            print(
+                f"Client data size does not meet the minimum requirement {args.least_samples}. Try 'args.dirichlet_alpha' larger than {args.dirichlet_alpha} /  'args.try_cnt' larger than {args.try_cnt} / 'args.least_sampes' lower than {args.least_samples}.")
+            sys.exit(0)
+
+        client_indices = [[] for _ in range(num_clients)]
+        for k in range(K):
+            idx_k = np.where(graph_labels == k)[0]
+            np.random.shuffle(idx_k)
+            proportions = np.random.dirichlet(np.repeat(alpha, num_clients))
+            proportions = np.array(
+                [p * (len(idx_j) < N / num_clients) for p, idx_j in zip(proportions, client_indices)])
+            proportions = proportions / proportions.sum()
+            proportions = (np.cumsum(proportions) * len(idx_k)).astype(int)[:-1]
+            client_indices = [idx_j + idx.tolist() for idx_j, idx in zip(client_indices, np.split(idx_k, proportions))]
+            min_size = min([len(idx_j) for idx_j in client_indices])
+        try_cnt += 1
 
     local_data = []
-
+    client_label_counts = [[0] * K for _ in range(args.num_clients)]
     for client_id in range(args.num_clients):
+        for class_i in range(K):
+            client_label_counts[client_id][class_i] = (graph_labels[client_indices[client_id]] == class_i).sum()
+
         list.sort(client_indices[client_id])
-        
+
         local_id_to_global_id = {}
         for local_id, global_id in enumerate(client_indices[client_id]):
             local_id_to_global_id[local_id] = global_id
-        
-        local_graphs = global_dataset[client_indices[client_id]]
+
+        local_graphs = global_dataset.copy(client_indices[client_id])  # InMemoryDataset -> deep-copy subset
+        local_graphs.num_global_classes = global_dataset.num_classes
         local_graphs.global_map = local_id_to_global_id
         local_data.append(local_graphs)
-    
+
+    print(f"label_counts:\n{np.array(client_label_counts)}")
     return local_data
-    
-    
-    
-    
-    
+
+
 def fedsubgraph_label_dirichlet(args, global_dataset, shuffle=True):
     print("Conducting fedsubgraph label dirichlet simulation...")
     node_labels = global_dataset[0].y.numpy()
     num_clients = args.num_clients
     alpha = args.dirichlet_alpha
     unique_labels, label_counts = np.unique(node_labels, return_counts=True)
-    partition_matrix = np.zeros((len(unique_labels), num_clients))
-    for i, label in enumerate(unique_labels):
-        proportions = np.random.dirichlet(alpha*np.ones(num_clients))
-        partition_matrix[i] = np.round(proportions * label_counts[i])
-        partition_matrix[i, -1] = label_counts[i] - partition_matrix[i,:-1].sum()
-    client_indices = [[] for _ in range(num_clients)]
-    for i, label in enumerate(unique_labels):
-        label_indices = np.where(node_labels == label)[0]
-        if shuffle:
-            np.random.shuffle(label_indices)
-        cum_partitions = np.cumsum(partition_matrix[i]).astype(int)
-        prev_partition = 0
-        for client_id, partition in enumerate(cum_partitions):
-            client_indices[client_id].extend(label_indices[prev_partition:partition])
-            prev_partition = partition
-            
+
+    print(f"num_classes: {len(unique_labels)}")
+    print(f"global label distribution: {label_counts}")
+
+    min_size = 0
+    K = len(unique_labels)
+    N = node_labels.shape[0]
+
+    try_cnt = 0
+    while min_size < args.least_samples:
+        if try_cnt > args.dirichlet_try_cnt:
+            print(
+                f"Client data size does not meet the minimum requirement {args.least_samples}. Try 'args.dirichlet_alpha' larger than {args.dirichlet_alpha} /  'args.try_cnt' larger than {args.try_cnt} / 'args.least_sampes' lower than {args.least_samples}.")
+            sys.exit(0)
+
+        client_indices = [[] for _ in range(num_clients)]
+        for k in range(K):
+            idx_k = np.where(node_labels == k)[0]
+            np.random.shuffle(idx_k)
+            proportions = np.random.dirichlet(np.repeat(alpha, num_clients))
+            proportions = np.array(
+                [p * (len(idx_j) < N / num_clients) for p, idx_j in zip(proportions, client_indices)])
+            proportions = proportions / proportions.sum()
+            proportions = (np.cumsum(proportions) * len(idx_k)).astype(int)[:-1]
+            client_indices = [idx_j + idx.tolist() for idx_j, idx in zip(client_indices, np.split(idx_k, proportions))]
+            min_size = min([len(idx_j) for idx_j in client_indices])
+        try_cnt += 1
+
     local_data = []
-    
+    client_label_counts = [[0] * K for _ in range(args.num_clients)]
     for client_id in range(args.num_clients):
+        for class_i in range(K):
+            client_label_counts[client_id][class_i] = (node_labels[client_indices[client_id]] == class_i).sum()
         local_subgraph = get_subgraph_pyg_data(global_dataset, client_indices[client_id])
         local_data.append(local_subgraph)
-
+    print(f"label_counts:\n{np.array(client_label_counts)}")
     return local_data
 
 
 def fedsubgraph_louvain_clustering(args, global_dataset):
     print("Conducting fedsubgraph louvain clustering simulation...")
-    louvain = Louvain(modularity='newman', resolution=args.louvain_resolution, return_aggregate=True) # resolution 越大产生的社区越多, 社区粒度越小
+    louvain = Louvain(modularity='newman', resolution=args.louvain_resolution,
+                      return_aggregate=True)  # resolution 越大产生的社区越多, 社区粒度越小
     adj_csr = to_scipy_sparse_matrix(global_dataset[0].edge_index)
     fit_result = louvain.fit_predict(adj_csr)
     communities = {}
     for node_id, com_id in enumerate(fit_result):
         if com_id not in communities:
-            communities[com_id] = {"nodes":[], "num_nodes":0, "label_distribution":[0] * global_dataset.num_classes}
+            communities[com_id] = {"nodes": [], "num_nodes": 0, "label_distribution": [0] * global_dataset.num_classes}
         communities[com_id]["nodes"].append(node_id)
-        
+
     for com_id in communities.keys():
         communities[com_id]["num_nodes"] = len(communities[com_id]["nodes"])
         for node in communities[com_id]["nodes"]:
@@ -173,10 +183,10 @@ def fedsubgraph_louvain_clustering(args, global_dataset):
     clustering_labels = kmeans.labels_
 
     client_indices = {client_id: [] for client_id in range(args.num_clients)}
-    
+
     for com_id in range(num_communities):
         client_indices[clustering_labels[com_id]] += communities[com_id]["nodes"]
-        
+
     local_data = []
     for client_id in range(args.num_clients):
         local_subgraph = get_subgraph_pyg_data(global_dataset, client_indices[client_id])
@@ -188,18 +198,18 @@ def fedsubgraph_louvain_clustering(args, global_dataset):
 def fedsubgraph_metis_clustering(args, global_dataset):
     print("Conducting fedsubgraph metis clustering simulation...")
     graph_nx = to_networkx(global_dataset[0], to_undirected=True)
-    communities = {com_id: {"nodes":[], "num_nodes":0, "label_distribution":[0] * global_dataset.num_classes} 
-                            for com_id in range(args.metis_num_coms)}
-    n_cuts, membership = metis.part_graph(graph_nx, args.metis_num_coms)
+    communities = {com_id: {"nodes": [], "num_nodes": 0, "label_distribution": [0] * global_dataset.num_classes}
+                   for com_id in range(args.metis_num_coms)}
+    n_cuts, membership = metis.part_graph(args.metis_num_coms, graph_nx)
     for com_id in range(args.metis_num_coms):
         com_indices = np.where(np.array(membership) == com_id)[0]
         com_indices = list(com_indices)
         communities[com_id]["nodes"] = com_indices
-        communities["num_nodes"] = len(com_indices)
+        communities[com_id]["num_nodes"] = len(com_indices)
         for node in communities[com_id]["nodes"]:
             label = copy.deepcopy(global_dataset[0].y[node])
             communities[com_id]["label_distribution"][label] += 1
-    
+
     num_communities = len(communities)
     clustering_data = np.zeros(shape=(num_communities, global_dataset.num_classes))
     for com_id in communities.keys():
@@ -213,14 +223,118 @@ def fedsubgraph_metis_clustering(args, global_dataset):
     clustering_labels = kmeans.labels_
 
     client_indices = {client_id: [] for client_id in range(args.num_clients)}
-    
+
     for com_id in range(num_communities):
         client_indices[clustering_labels[com_id]] += communities[com_id]["nodes"]
-    
+
     local_data = []
     for client_id in range(args.num_clients):
         local_subgraph = get_subgraph_pyg_data(global_dataset, client_indices[client_id])
         local_data.append(local_subgraph)
-    
+
     return local_data
-    
+
+
+def fedsubgraph_metis(args, global_dataset):
+    print("Conducting fedsubgraph metis simulation...")
+    assert args.metis_num_coms == args.num_clients, f"args.metis_num_coms should be equal to args.num_clients."
+
+    graph_nx = to_networkx(global_dataset[0], to_undirected=True)
+    n_cuts, membership = metis.part_graph(args.metis_num_coms, graph_nx)
+
+    for client_id in range(args.num_clients):
+        client_indices = np.where(np.array(membership) == client_id)[0].tolist()
+
+    local_data = []
+
+    for client_id in range(args.num_clients):
+        local_subgraph = get_subgraph_pyg_data(global_dataset, client_indices[client_id])
+        local_data.append(local_subgraph)
+
+    return local_data
+
+
+def fedsubgraph_louvain(args, global_dataset):
+    print("Conducting fedsubgraph louvain clustering simulation...")
+    louvain = Louvain(modularity='newman', resolution=args.louvain_resolution, return_aggregate=True)
+    num_nodes = global_dataset[0].x.shape[0]
+    adj_csr = to_scipy_sparse_matrix(global_dataset[0].edge_index)
+    fit_result = louvain.fit_predict(adj_csr)
+    partition = {}
+    for node_id, com_id in enumerate(fit_result):
+        partition[node_id] = int(com_id)
+
+    groups = []
+
+    for key in partition.keys():
+        if partition[key] not in groups:
+            groups.append(partition[key])
+    print(groups)
+    partition_groups = {group_i: [] for group_i in groups}
+
+    for key in partition.keys():
+        partition_groups[partition[key]].append(key)
+
+    group_len_max = num_nodes // args.num_clients - args.louvain_delta
+    for group_i in groups:
+        while len(partition_groups[group_i]) > group_len_max:
+            long_group = list.copy(partition_groups[group_i])
+            partition_groups[group_i] = list.copy(long_group[:group_len_max])
+            new_grp_i = max(groups) + 1
+            groups.append(new_grp_i)
+            partition_groups[new_grp_i] = long_group[group_len_max:]
+    print(groups)
+
+    len_list = []
+    for group_i in groups:
+        len_list.append(len(partition_groups[group_i]))
+
+    len_dict = {}
+
+    for i in range(len(groups)):
+        len_dict[groups[i]] = len_list[i]
+    sort_len_dict = {
+        k: v
+        for k, v in sorted(len_dict.items(), key=lambda item: item[1], reverse=True)
+    }
+
+    owner_node_ids = {owner_id: [] for owner_id in range(args.num_clients)}
+
+    owner_nodes_len = num_nodes // args.num_clients
+    owner_list = [i for i in range(args.num_clients)]
+    owner_ind = 0
+
+    give_up = 1000
+
+    for group_i in sort_len_dict.keys():
+        while (
+                len(owner_list) >= 2
+                and len(owner_node_ids[owner_list[owner_ind]]) >= owner_nodes_len
+        ):
+            owner_list.remove(owner_list[owner_ind])
+            owner_ind = owner_ind % len(owner_list)
+        cnt = 0
+        while (
+                len(owner_node_ids[owner_list[owner_ind]]) +
+                len(partition_groups[group_i])
+                >= owner_nodes_len + args.louvain_delta
+        ):
+            owner_ind = (owner_ind + 1) % len(owner_list)
+            cnt += 1
+            if cnt > give_up:
+                cnt = 0
+                min_v = 1e15
+                for i in range(len(owner_list)):
+                    if len(owner_node_ids[owner_list[owner_ind]]) < min_v:
+                        min_v = len(owner_node_ids[owner_list[owner_ind]])
+                        owner_ind = i
+                break
+
+        owner_node_ids[owner_list[owner_ind]] += partition_groups[group_i]
+
+    local_data = []
+    for client_id in range(args.num_clients):
+        local_subgraph = get_subgraph_pyg_data(global_dataset, owner_node_ids[client_id])
+        local_data.append(local_subgraph)
+
+    return local_data

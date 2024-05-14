@@ -1,11 +1,9 @@
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import SAGEConv
 
 
 class GraphSAGE(nn.Module):
-
     def __init__(self, input_dim, hid_dim, output_dim, num_layers=2, dropout=0.5):
         super(GraphSAGE, self).__init__()
         self.num_layers = num_layers

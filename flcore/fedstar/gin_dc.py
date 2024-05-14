@@ -47,3 +47,4 @@ class DecoupledGIN(torch.nn.Module):
         y = self.readout(y)
         x = F.log_softmax(x, dim=1)
         return x,y
+

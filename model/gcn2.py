@@ -1,10 +1,9 @@
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GCN2Conv
 
-class GCN2(torch.nn.Module):
 
+class GCN2(nn.Module):
     def __init__(self, input_dim, hid_dim, output_dim, alpha=0.1, num_layers=2, dropout=0.5):
         super(GCN2, self).__init__()
         self.alpha = alpha
@@ -24,3 +23,6 @@ class GCN2(torch.nn.Module):
             x = conv(x, x0, edge_index)
         logits = self.linear2(x)
         return x, logits
+
+
+

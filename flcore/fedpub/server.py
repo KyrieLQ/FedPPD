@@ -93,7 +93,7 @@ def from_networkx(G, group_node_attrs=None, group_edge_attrs=None):
 
 class FedPubServer(BaseServer):
     def __init__(self, args, global_data, data_dir, message_pool, device):
-        super(FedPubServer, self).__init__(args, global_data, data_dir, message_pool, device)
+        super(FedPubServer, self).__init__(args, global_data, data_dir, message_pool, device, personalized=True)
         self.proxy = self.get_proxy_data(self.task.num_feats)
         self.task.load_custom_model(
             MaskedGCN(input_dim=self.task.num_feats, hid_dim=self.args.hid_dim, output_dim=self.task.num_global_classes,
@@ -168,3 +168,4 @@ class FedPubServer(BaseServer):
             nx.random_partition_graph([num_nodes] * num_graphs, p_in=0.1, p_out=0, seed=self.args.seed))
         data.x = torch.normal(mean=0, std=1, size=(num_nodes * num_graphs, n_feat))
         return data
+

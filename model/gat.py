@@ -1,10 +1,9 @@
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GATConv
 
-class GAT(nn.Module):
 
+class GAT(nn.Module):
     def __init__(self, input_dim, hid_dim, output_dim, num_layers=2, dropout=0.5):
         super(GAT, self).__init__()
         self.num_layers = num_layers
@@ -30,4 +29,6 @@ class GAT(nn.Module):
         logits = self.layers[-1](x, edge_index)
 
         return x, logits
-    
+
+
+

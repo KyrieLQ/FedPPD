@@ -10,26 +10,26 @@ from torch_geometric.utils import coalesce, cumsum, remove_self_loops
 from typing import Dict, List, Optional, Tuple
 
 
-def load_global_dataset(root, scenairo, dataset):
-    if scenairo == "fedgraph":
-        if dataset in  ["AIDS",
-                        "BZR",
-                        "COLLAB", "COX2",
-                        "DD", "DHFR",
-                        "ENZYMES",
-                        "IMDB-BINARY", "IMDB-MULTI",
-                        "MUTAG", "NCI1",
-                        "PROTEINS", "PTC_MR"]:
-            
+def load_global_dataset(root, scenario, dataset):
+    if scenario == "fedgraph":
+        if dataset in ["AIDS",
+                       "BZR",
+                       "COLLAB", "COX2",
+                       "DD", "DHFR",
+                       "ENZYMES",
+                       "IMDB-BINARY", "IMDB-MULTI",
+                       "MUTAG", "NCI1",
+                       "PROTEINS", "PTC_MR"]:
+
             from torch_geometric.datasets import TUDataset
             return TUDataset(root=osp.join(root, "fedgraph"), name=dataset, use_node_attr=True, use_edge_attr=True)
         elif dataset in ["hERG"]:
             return hERGDataset(root=osp.join(root, "fedgraph"), use_node_attr=True, use_edge_attr=True)
-            
-        
-        
-                
-    elif scenairo == "fedsubgraph":
+
+
+
+
+    elif scenario == "fedsubgraph":
         if dataset in ["Cora", "CiteSeer", "PubMed"]:
             from torch_geometric.datasets import Planetoid
             return Planetoid(root=osp.join(root, "fedsubgraph"), name=dataset)
@@ -61,7 +61,7 @@ def load_global_dataset(root, scenairo, dataset):
         elif dataset in ["OGB-MAG"]:
             from torch_geometric.datasets import OGB_MAG
             return OGB_MAG(root=osp.join(root, "fedsubgraph"), preprocess="metapath2vec")
-        
+
 
 def cat(seq: List[Optional[torch.Tensor]]) -> Optional[torch.Tensor]:
     values = [v for v in seq if v is not None]
@@ -102,16 +102,15 @@ def split(data: Data, batch: torch.Tensor) -> Tuple[Data, Dict[str, torch.Tensor
 class hERGDataset(InMemoryDataset):
     url = "https://fedmol.s3-us-west-1.amazonaws.com/datasets/herg/herg.zip"
 
-
     def __init__(
-        self,
-        root: str,
-        transform: Optional[Callable] = None,
-        pre_transform: Optional[Callable] = None,
-        pre_filter: Optional[Callable] = None,
-        force_reload: bool = False,
-        use_node_attr: bool = False,
-        use_edge_attr: bool = False,
+            self,
+            root: str,
+            transform: Optional[Callable] = None,
+            pre_transform: Optional[Callable] = None,
+            pre_filter: Optional[Callable] = None,
+            force_reload: bool = False,
+            use_node_attr: bool = False,
+            use_edge_attr: bool = False,
     ) -> None:
         self.name = "hERG"
         super().__init__(root, transform, pre_transform, pre_filter,
@@ -171,7 +170,8 @@ class hERGDataset(InMemoryDataset):
 
     @property
     def raw_file_names(self) -> List[str]:
-        names = ['adjacency_matrices.pkl', 'edge_feature_matrices.pkl', 'feature_matrices.pkl', 'labels.npy', 'smiles.pkl']
+        names = ['adjacency_matrices.pkl', 'edge_feature_matrices.pkl', 'feature_matrices.pkl', 'labels.npy',
+                 'smiles.pkl']
         return names
 
     @property
@@ -188,15 +188,15 @@ class hERGDataset(InMemoryDataset):
         num_nodes_list = []
         ptr = 0
         for csr_adj in csr_adj_list:
-            edge_index_i, _ = from_scipy_sparse_matrix(csr_adj)            
+            edge_index_i, _ = from_scipy_sparse_matrix(csr_adj)
             source = edge_index_i[0, :]
             target = edge_index_i[1, :]
             selected = source <= target
-            edge_index_i = edge_index_i[:, selected]            
+            edge_index_i = edge_index_i[:, selected]
             edge_index_list.append(edge_index_i + ptr)
             ptr += csr_adj.shape[0]
             num_nodes_list.append(csr_adj.shape[0])
-            
+
         edge_index = torch.hstack(edge_index_list)
 
         num_graphs = len(num_nodes_list)
@@ -204,25 +204,21 @@ class hERGDataset(InMemoryDataset):
 
         with open(osp.join(self.raw_dir, "feature_matrices.pkl"), 'rb') as file:
             node_feature_list = pickle.load(file)
-        node_attribute = torch.vstack([torch.tensor(node_feature_np) for node_feature_np in node_feature_list])  
-
+        node_attribute = torch.vstack([torch.tensor(node_feature_np) for node_feature_np in node_feature_list])
 
         node_label = torch.empty((batch.size(0), 0))
 
-        
         with open(osp.join(self.raw_dir, "edge_feature_matrices.pkl"), 'rb') as file:
             edge_feature_list = pickle.load(file)
         edge_attribute = torch.vstack([torch.tensor(edge_feature_np)[:, 2:] for edge_feature_np in edge_feature_list])
 
         edge_label = torch.empty((edge_index.size(1), 0))
 
-
         x = cat([node_attribute, node_label])
         edge_attr = cat([edge_attribute, edge_label])
 
         graph_feature_np = np.load(osp.join(self.raw_dir, "labels.npy"))
         y = torch.tensor(graph_feature_np).squeeze()
-
 
         num_nodes = int(edge_index.max()) + 1 if x is None else x.size(0)
         edge_index, edge_attr = remove_self_loops(edge_index, edge_attr)
@@ -267,14 +263,14 @@ class WikiPages(InMemoryDataset):
     url = "https://data.dgl.ai/dataset"
 
     def __init__(
-        self,
-        root: str,
-        name: str,
-        transform: Optional[Callable] = None,
-        pre_transform: Optional[Callable] = None,
-        force_reload: bool = False,
+            self,
+            root: str,
+            name: str,
+            transform: Optional[Callable] = None,
+            pre_transform: Optional[Callable] = None,
+            force_reload: bool = False,
     ) -> None:
-        self.name = name # [chameleon, squirrel]
+        self.name = name  # [chameleon, squirrel]
 
         super().__init__(root, transform, pre_transform,
                          force_reload=force_reload)
@@ -322,17 +318,12 @@ class WikiPages(InMemoryDataset):
         x = torch.tensor(node_feature_list)
         y = torch.tensor(node_label_list)
         data = Data(x=x, edge_index=edge_index, y=y)
-        
-        
+
         data = data if self.pre_transform is None else self.pre_transform(data)
         self.save([data], self.processed_paths[0])
 
     def __repr__(self) -> str:
         return f'{self.name}()'
-
-
-
-
 
 # class OAGDataset(InMemoryDataset):
 #     names = {

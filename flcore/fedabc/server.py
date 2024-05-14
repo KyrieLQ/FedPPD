@@ -20,7 +20,7 @@ class FedAbcServer(BaseServer):
         # gen_num = 140
         # gen_dim = 1433
         # noise_dim = 32
-        self.generator = FedAbc_ConGenerator(noise_dim=config["noise_dim"], feat_dim=config["gen_dim"], out_dim=self.global_data["num_classes"],
+        self.generator = FedAbc_ConGenerator(noise_dim=config["noise_dim"], feat_dim=config["gen_dim"], out_dim=self.global_data["num_global_classes"],
                                         dropout=0).to(self.device)
         self.generator_optimizer = Adam(self.generator.parameters(), lr=self.args.lr_g, weight_decay=self.args.weight_decay)
         self.global_model_optimizer = Adam(self.task.model.parameters(), lr=self.args.lr_t,
@@ -92,15 +92,15 @@ class FedAbcServer(BaseServer):
             for y in self.message_pool[f"client_{client_id}"]["y_label"]:
                 y_label_total.append(int(y))
         #print(y_label_total)
-        cls_num = [0] * self.global_data["num_classes"]
+        cls_num = [0] * self.global_data["num_global_classes"]
         for i in y_label_total:
             cls_num[i] = cls_num[i] + 1
         c = self.generate_labels(config["gen_num"],cls_num)
-        c = torch.tensor(c,dtype=torch.long)
+        c = torch.tensor(c,dtype=torch.long).to(self.device)
         #print("c:")
         #print(c)
         each_class_idx = {}
-        for class_i in range(self.global_data["num_classes"]):
+        for class_i in range(self.global_data["num_global_classes"]):
             each_class_idx[class_i] = c == class_i
             each_class_idx[class_i] = each_class_idx[class_i].to(self.device)
         #print("each_class_idx")
@@ -110,9 +110,9 @@ class FedAbcServer(BaseServer):
         for client_id in self.message_pool["sampled_clients"]:
             real_prototypes = self.message_pool[f"client_{client_id}"]["local_prototype"]
             real_prototypes_list = [real_prototypes[class_i] for class_i in
-                                    range(self.global_data["num_classes"])]
+                                    range(self.global_data["num_global_classes"])]
             real_local_prototype1 = torch.stack(real_prototypes_list)  # 真实的本地原型
-            real_local_prototype[client_id] =  real_local_prototype1 # 真实的本地原型
+            real_local_prototype[client_id] =  real_local_prototype1.to(self.device) # 真实的本地原型
         #print(real_local_prototype[0].shape)
 
         # for _ in range(self.args.glb_epoches):
@@ -147,13 +147,13 @@ class FedAbcServer(BaseServer):
             for client_id in self.message_pool["sampled_clients"]:
                 local_pred, _ = self.message_pool[f"client_{client_id}"]["local_model"].forward(data=pseudo_graph)
 
-                local_pred_new = torch.zeros_like(local_pred)
+                local_pred_new = torch.zeros_like(local_pred).to(self.device)
                 #对每个点聚合其邻居的原型表示
                 for node_idx in range(config["gen_num"]):
                     if neighbors_for_every_node_new[node_idx].__len__() > 0:  # 如果当前节点有邻居节点
                         # 获取邻居节点的类别原型
                         neighbor_prototypes = [local_pred[i] for i in neighbors_for_every_node_new[node_idx]]
-                        neighbor_prototypes = torch.stack(neighbor_prototypes)
+                        neighbor_prototypes = torch.stack(neighbor_prototypes).to(self.device)
 
                         # 计算邻居节点的原型的均值并更新聚合后的原型
                         neighbor_prototype_mean = torch.mean(neighbor_prototypes, dim=0)
@@ -167,7 +167,7 @@ class FedAbcServer(BaseServer):
 
                 local_pred_new.retain_grad()
                 class_prototypes = []
-                for class_i in range(self.global_data["num_classes"]):
+                for class_i in range(self.global_data["num_global_classes"]):
                     class_indices = each_class_idx[class_i]
                     class_preds = local_pred_new[class_indices]
                     class_prototype = torch.mean(class_preds, dim=0)
@@ -229,14 +229,14 @@ class FedAbcServer(BaseServer):
                     if neighbors_for_every_node_new[node_idx].__len__() > 0:  # 如果当前节点有邻居节点
                         # 获取邻居节点的类别原型
                         neighbor_prototypes = [local_pred[i] for i in neighbors_for_every_node_new[node_idx]]
-                        neighbor_prototypes = torch.stack(neighbor_prototypes)
+                        neighbor_prototypes = torch.stack(neighbor_prototypes).to(self.device)
 
                         # 计算邻居节点的原型的均值并更新聚合后的原型
                         neighbor_prototype_mean = torch.mean(neighbor_prototypes, dim=0)
                         local_pred_new[node_idx] = local_pred[node_idx] * config["alpha"] + neighbor_prototype_mean * (1-config["alpha"])
 
                 class_prototypes = []
-                for class_i in range(self.global_data["num_classes"]):
+                for class_i in range(self.global_data["num_global_classes"]):
                     class_indices = each_class_idx[class_i]
                     class_preds = local_pred_new[class_indices]
                     class_prototype = torch.mean(class_preds, dim=0)
@@ -244,27 +244,27 @@ class FedAbcServer(BaseServer):
                 pseudo_local_prototype[client_id] = torch.stack(class_prototypes)  # 虚假本地原型
 
             #计算伪全局原型
-            # all_class_prototypes  = {class_i: [] for class_i in range(self.global_data["num_classes"])}
+            # all_class_prototypes  = {class_i: [] for class_i in range(self.global_data["num_global_classes"])}
             # for client_id in self.message_pool["sampled_clients"]:
             #     pseudo_local_prototypes = pseudo_local_prototype[client_id]
-            #     for class_i in range(self.global_data["num_classes"]):
+            #     for class_i in range(self.global_data["num_global_classes"]):
             #         all_class_prototypes[class_i].append(pseudo_local_prototypes[class_i])
             # pseudo_global_prototype = {}
-            # for class_i in range(self.global_data["num_classes"]):
+            # for class_i in range(self.global_data["num_global_classes"]):
             #     # 将所有客户端的该类别原型堆叠起来
             #     class_prototypes = torch.stack(all_class_prototypes[class_i])
             #     # 计算所有客户端原型的均值作为全局原型
             #     pseudo_global_prototype[class_i] = torch.mean(class_prototypes, dim=0)
-            # pseudo_global_prototype = torch.stack([pseudo_global_prototype[class_i] for class_i in range(self.global_data["num_classes"])])
+            # pseudo_global_prototype = torch.stack([pseudo_global_prototype[class_i] for class_i in range(self.global_data["num_global_classes"])])
             # pseudo_global_prototype = pseudo_global_prototype.detach()
 
             #通过全局模型计算伪全局原型2
             global_pred, _ = self.task.model.forward(data=pseudo_graph)
             pseudo_global_prototype2 = torch.zeros(*pseudo_local_prototype[0].shape)
-            for class_i in range(self.global_data["num_classes"]):
+            for class_i in range(self.global_data["num_global_classes"]):
                 class_indices = each_class_idx[class_i]
                 class_preds = global_pred[class_indices]
-                class_prototype = torch.mean(class_preds, dim=0)
+                class_prototype = torch.mean(class_preds, dim=0).to(self.device)
                 pseudo_global_prototype2[class_i] = class_prototype
 
 
@@ -273,7 +273,7 @@ class FedAbcServer(BaseServer):
             for client_id in self.message_pool["sampled_clients"]:
                 pseudo_prototypes_local = copy.copy(pseudo_local_prototype[client_id])
                 distances = torch.cdist(pseudo_prototypes_local, pseudo_global_prototype2)
-                loss = torch.mean(distances, dim=1)  # 对于每个类别，计算所有距离的平均值
+                loss = torch.mean(distances, dim=1).to(self.device)  # 对于每个类别，计算所有距离的平均值
                 loss_cdist_lg += torch.sum(loss)
             # distances = torch.cdist(pseudo_global_prototype, pseudo_global_prototype2)
             # loss = torch.mean(distances, dim=1)  # 对于每个类别，计算所有距离的平均值
