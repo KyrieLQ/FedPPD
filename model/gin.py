@@ -2,11 +2,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GINConv
 from torch_geometric.nn.pool import global_add_pool
+import torch
 
 
 class GIN(nn.Module):
     def __init__(self, input_dim, hid_dim, output_dim, num_layers=2, dropout=0.5):
-        super().__init__()
+        super(GIN, self).__init__()
 
         self.convs = nn.ModuleList()
         self.batch_norms = nn.ModuleList()
@@ -22,6 +23,7 @@ class GIN(nn.Module):
             self.convs.append(conv)
             self.batch_norms.append(nn.BatchNorm1d(hid_dim))
             input_dim = hid_dim
+
         self.lin1 = nn.Linear(hid_dim, hid_dim)
         self.batch_norm1 = nn.BatchNorm1d(hid_dim)
         self.lin2 = nn.Linear(hid_dim, output_dim)

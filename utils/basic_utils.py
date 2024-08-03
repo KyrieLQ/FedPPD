@@ -19,7 +19,10 @@ def seed_everything(seed):
 
 
 def load_client(args, client_id, data, data_dir, message_pool, device):
-    if args.fl_algorithm == "fedavg":
+    if args.fl_algorithm == "isolate":
+        from flcore.isolate.client import IsolateClient
+        return IsolateClient(args, client_id, data, data_dir, message_pool, device)
+    elif args.fl_algorithm == "fedavg":
         from flcore.fedavg.client import FedAvgClient
         return FedAvgClient(args, client_id, data, data_dir, message_pool, device)
     elif args.fl_algorithm == "fedprox":
@@ -61,13 +64,19 @@ def load_client(args, client_id, data, data_dir, message_pool, device):
     elif args.fl_algorithm == "gcfl_plus":
         from flcore.gcfl_plus.client import GCFLPlusClient
         return GCFLPlusClient(args, client_id, data, data_dir, message_pool, device)
-    elif args.fl_algorithm == "fedabc":
-        from flcore.fedabc.client import FedAbcClient
-        return FedAbcClient(args, client_id, data, data_dir, message_pool, device)
+    elif args.fl_algorithm == "feddep":
+        from flcore.feddep.client import FedDEPClient
+        return FedDEPClient(args, client_id, data, data_dir, message_pool, device)
+    elif args.fl_algorithm == "fedppd":
+        from flcore.fedppd.client import FedPPDClient
+        return FedPPDClient(args, client_id, data, data_dir, message_pool, device)
 
 
 def load_server(args, global_data, data_dir, message_pool, device):
-    if args.fl_algorithm == "fedavg":
+    if args.fl_algorithm == "isolate":
+        from flcore.isolate.server import IsolateServer
+        return IsolateServer(args, global_data, data_dir, message_pool, device)
+    elif args.fl_algorithm == "fedavg":
         from flcore.fedavg.server import FedAvgServer
         return FedAvgServer(args, global_data, data_dir, message_pool, device)
     elif args.fl_algorithm == "fedprox":
@@ -109,9 +118,12 @@ def load_server(args, global_data, data_dir, message_pool, device):
     elif args.fl_algorithm == "gcfl_plus":
         from flcore.gcfl_plus.server import GCFLPlusServer
         return GCFLPlusServer(args, global_data, data_dir, message_pool, device)
-    elif args.fl_algorithm == "fedabc":
-        from flcore.fedabc.server import FedAbcServer
-        return FedAbcServer(args, global_data, data_dir, message_pool, device)
+    elif args.fl_algorithm == "feddep":
+        from flcore.feddep.server import FedDEPEServer
+        return FedDEPEServer(args, global_data, data_dir, message_pool, device)
+    elif args.fl_algorithm == "fedppd":
+        from flcore.fedppd.server import FedPPDServer
+        return FedPPDServer(args, global_data, data_dir, message_pool, device)
 
 
 def load_optim(args):

@@ -110,6 +110,7 @@ class FedTADServer(BaseServer):
 
                 ############ generator loss #############
                 loss_G = config["lam1"] * loss_sem + loss_diverg + config["lam2"] * loss_div
+                print(loss_G)
                 
                 loss_G.backward()
                 self.generator_optimizer.step()

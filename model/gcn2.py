@@ -23,6 +23,3 @@ class GCN2(nn.Module):
             x = conv(x, x0, edge_index)
         logits = self.linear2(x)
         return x, logits
-
-
-

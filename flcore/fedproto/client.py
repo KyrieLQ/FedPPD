@@ -16,7 +16,8 @@ class FedProtoClient(BaseClient):
 
     def get_custom_loss_fn(self):
         def custom_loss_fn(embedding, logits, label, mask):
-            if self.message_pool["round"] == 0:
+            if self.message_pool["round"] == 0 or self.task.num_samples != label.shape[
+                0]:  # first round or eval on global
                 return self.task.default_loss_fn(logits[mask], label[mask])
             else:
                 loss_fedproto = 0
@@ -35,7 +36,7 @@ class FedProtoClient(BaseClient):
         with torch.no_grad():
             embedding = self.task.evaluate(mute=True)["embedding"]
             for class_i in range(self.task.num_global_classes):
-                selected_idx = self.task.train_mask & (self.task.data.y == class_i)
+                selected_idx = self.task.train_mask & (self.task.data.y.to(self.device) == class_i)
                 if selected_idx.sum() == 0:
                     self.local_prototype[class_i] = torch.zeros(self.args.hid_dim).to(self.device)
                 else:
@@ -47,4 +48,3 @@ class FedProtoClient(BaseClient):
             "num_samples": self.task.num_samples,
             "local_prototype": self.local_prototype
         }
-

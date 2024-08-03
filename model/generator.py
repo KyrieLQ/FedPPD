@@ -4,10 +4,10 @@ import torch.nn.functional as F
 from torch_geometric.nn import GCNConv
 
 
-class FedAbc_ConGenerator(nn.Module):
+class fedppd_ConGenerator(nn.Module):
 
     def __init__(self, noise_dim, feat_dim, out_dim, dropout):
-        super(FedAbc_ConGenerator, self).__init__()
+        super(fedppd_ConGenerator, self).__init__()
         self.noise_dim = noise_dim
         self.emb_layer = nn.Embedding(out_dim, out_dim)
 

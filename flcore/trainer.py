@@ -66,18 +66,15 @@ class FGLTrainer:
             if self.args.evaluation_mode == "local_model_on_local_data":
                 num_samples = self.clients[client_id].task.num_samples
                 result = self.clients[client_id].task.evaluate()
-
             elif self.args.evaluation_mode == "local_model_on_global_data":
                 num_samples = self.server.task.num_samples
                 result = self.clients[client_id].task.evaluate(self.server.task.splitted_data)
-
             elif self.args.evaluation_mode == "global_model_on_local_data":
                 num_samples = self.clients[client_id].task.num_samples
                 if self.server.personalized:
                     raise ValueError(
                         f"personalized algorithm {self.args.fl_algorithm} doesn't support global model evaluation.")
                 result = self.server.task.evaluate(self.clients[client_id].task.splitted_data)
-                print(1)
             elif self.args.evaluation_mode == "global_model_on_global_data":
                 num_samples = self.server.task.num_samples
                 if self.server.personalized:
@@ -86,7 +83,6 @@ class FGLTrainer:
                 # only one-time infer
                 one_time_infer = True
                 result = self.server.task.evaluate()
-                print(1)
 
             if self.args.task in ["graph_cls", "graph_reg", "node_cls", "link_pred"]:
                 for metric in self.args.metrics:

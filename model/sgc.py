@@ -29,5 +29,3 @@ class SGC(nn.Module):
         logits = self.layers[-1](x, edge_index)
 
         return x, logits
-
-
