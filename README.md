@@ -15,9 +15,9 @@ You can execute the following command to run our method:
 python main.py
 ```
 
-If you want to change certain configurations while running, you can directly add configuration items. As shown below, it is desired to set the number of communication rounds to 100
+If you want to change certain configurations while running, you can directly add configuration items. The following is a request to use FedPPD to run code:
 ```python
-python main.py --num_rounds=100
+python main.py --fl_algorithm="fedppd"
 ```
 
 ## Settings
