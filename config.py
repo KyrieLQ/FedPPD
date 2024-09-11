@@ -94,7 +94,6 @@ parser.add_argument('--lr_t', type=float, default=1e-3)
 parser.add_argument('--dist_val', type=float, default=0.4)
 
 
-
 # model settings
 parser.add_argument("--model", type=str, default=[], action='append')
 parser.add_argument("--num_layers", type=int, default=2)

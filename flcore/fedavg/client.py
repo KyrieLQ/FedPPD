@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 from flcore.base import BaseClient
 
-
 class FedAvgClient(BaseClient):
     def __init__(self, args, client_id, data, data_dir, message_pool, device):
         super(FedAvgClient, self).__init__(args, client_id, data, data_dir, message_pool, device)

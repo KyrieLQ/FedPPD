@@ -2,7 +2,6 @@ import os
 import pickle
 
 
-
 # 定义搜索的根目录
 path = "/home/ai2/work/dataset/distrib/fedsubgraph_louvain_1_Cora_client_10/debug/"
 

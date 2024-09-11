@@ -12,7 +12,6 @@ from torch_geometric.loader import DataLoader
 import numpy as np
 from data.processing import processing
 
-
 class GraphClsTask(BaseTask):
     def __init__(self, args, client_id, data, data_dir, device):
         super(GraphClsTask, self).__init__(args, client_id, data, data_dir, device)
